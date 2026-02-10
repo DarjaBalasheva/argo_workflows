@@ -1,0 +1,28 @@
+name: "Positive: Coinflip (branching via when)"
+description: "Проверяет, что coinflip завершился успешно и выполнена ровно одна ветка (heads или tails)"
+tags: ["positive", "conditionals", "when"]
+timeout: "2m"
+namespace: "argo"
+
+workflowFile: "../coinflip.yaml"
+
+expect:
+  workflowPhase: "Succeeded"
+
+  anyOf:
+    - nodes:
+        - selector: { displayName: "flip-coin" }
+          phase: "Succeeded"
+        - selector: { displayName: "heads" }
+          phase: "Succeeded"
+          logs:
+            contains:
+              - "it was heads"
+    - nodes:
+        - selector: { displayName: "flip-coin" }
+          phase: "Succeeded"
+        - selector: { displayName: "tails" }
+          phase: "Succeeded"
+          logs:
+            contains:
+              - "it was tails"

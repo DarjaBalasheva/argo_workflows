@@ -33,7 +33,8 @@ python3 -m venv ~/venv-argo-test
 source ~/venv-argo-test/bin/activate
 python -m pip install -U pip
 python -m pip install "pytest>=7.0"
-pytest --version
+pip install pyyaml
+pip install kubernetes
 
 ## Запуск тестов
 Python

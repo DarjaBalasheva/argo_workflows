@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  labels:
+    workflows.argoproj.io/no-test: "environment"
+  generateName: hello-hybrid-
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: mytemplate
+  templates:
+    - name: mytemplate
+      steps:
+        - - name: step1
+            template: hello-win
+        - - name: step2
+            template: hello-linux
+
+    - name: hello-win
+      container:
+        image: busybox
+        command: ["sh", "-c"]
+        args: ["echo 'Hello from Windows Container!'"]
+
+    - name: hello-linux
+      container:
+        image: busybox
+        command: ["sh", "-c"]
+        args: ["echo 'Hello from Linux Container!'"]

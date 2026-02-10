@@ -1,0 +1,16 @@
+name: "Positive: Hello World Workflow"
+description: "Проверяет, что hello-hybrid успешно выполняется"
+tags: ["positive", "smoke"]
+timeout: "2m"
+namespace: "argo"
+
+# Указываем путь до процесса, который будет тестить
+workflowFile: "../hello-workflow.yaml"
+
+# Прописываем условия, по которым будем считать, что сценарий исполнился успешно
+expect:
+  workflowPhase: "Succeeded"
+  maxDuration: "30s"
+  logs:
+    contains:
+      - "hello world"
