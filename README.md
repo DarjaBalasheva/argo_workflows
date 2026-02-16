@@ -37,8 +37,4 @@ pip install pyyaml
 pip install kubernetes
 
 ## Запуск тестов
-Python
-pytest -svv test_argo_hello_world.py
-
-Java
-mvn -q -Dtest=ArgoHelloWorkflowTest test
+python3 python_test_interface.py
