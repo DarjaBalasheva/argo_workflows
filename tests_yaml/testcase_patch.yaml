@@ -1,0 +1,132 @@
+name: "Functional: Hot-patch workflow parameter during execution"
+description: |
+  Проверяет поведение Argo Workflows при изменении spec работающего
+  workflow через kubectl apply. Пока step-B выполняет длительную
+  операцию, параметр message для step-C изменяется с
+  "Step C: Reached the final step." на
+  "Step C: I am modified!".
+  
+  После завершения workflow проверяем, что:
+  - step-A отработал с оригинальным параметром
+  - step-B завершился успешно
+  - step-C получил и использовал НОВОЕ значение параметра
+tags:
+  - functional
+  - parameters
+  - hot-patch
+  - steps
+
+timeout: "7m"
+
+# ===== ЧТО ЗАПУСКАЕМ =====
+workflow:
+  apiVersion: argoproj.io/v1alpha1
+  kind: Workflow
+  metadata:
+    generateName: test-integrity-
+  spec:
+    serviceAccountName: argo-workflow
+    entrypoint: main
+    templates:
+      - name: main
+        steps:
+          - - name: step-A
+              template: say-something
+              arguments:
+                parameters:
+                  - { name: message, value: "Step A: All good." }
+          - - name: step-B
+              template: long-running-task
+          - - name: step-C
+              template: say-something
+              arguments:
+                parameters:
+                  - { name: message, value: "Step C: Reached the final step." }
+
+      - name: say-something
+        inputs:
+          parameters:
+            - name: message
+        container:
+          image: alpine:latest
+          command: [sh, -c]
+          args: ["echo '{{inputs.parameters.message}}'"]
+
+      - name: long-running-task
+        container:
+          image: alpine:latest
+          command: [sh, -c]
+          args:
+            - >-
+              echo 'Step B: Starting a long task (3 minutes)...';
+              sleep 180;
+              echo 'Step B: Finished long task.'
+
+# ===== ЧТО ДЕЛАЕМ ВО ВРЕМЯ ВЫПОЛНЕНИЯ =====
+actions:
+  - when:
+      nodeName: "step-B"
+      nodePhase: "Running"
+    do:
+      type: "patch_workflow"
+      patch:
+        spec:
+          entrypoint: main
+          templates:
+            - name: main
+              steps:
+                - - name: step-A
+                    template: say-something
+                    arguments:
+                      parameters:
+                        - { name: message, value: "Step A: All good." }
+                - - name: step-B
+                    template: long-running-task
+                - - name: step-C
+                    template: say-something
+                    arguments:
+                      parameters:
+                        - { name: message, value: "Step C: I am modified!" }
+            - name: say-something
+              inputs:
+                parameters:
+                  - name: message
+              container:
+                image: alpine:latest
+                command: [sh, -c]
+                args: ["echo '{{inputs.parameters.message}}'"]
+            - name: long-running-task
+              container:
+                image: alpine:latest
+                command: [sh, -c]
+                args:
+                  - >-
+                    echo 'Step B: Starting a long task (3 minutes)...';
+                    sleep 180;
+                    echo 'Step B: Finished long task.'
+
+# ===== ЧТО ПРОВЕРЯЕМ =====
+expect:
+  # Workflow должен завершиться успешно
+  workflowPhase: "Succeeded"
+
+  nodes:
+    # step-A: выполнился ДО патча, параметр оригинальный
+    - name: "step-A"
+      phase: "Succeeded"
+      inputs:
+        parameters:
+          - name: "message"
+            value: "Step A: All good."
+
+    # step-B: выполнился успешно (sleep завершился штатно)
+    - name: "step-B"
+      phase: "Succeeded"
+
+    # step-C: выполнился ПОСЛЕ патча, параметр должен быть НОВЫМ
+    - name: "step-C"
+      phase: "Succeeded"
+      inputs:
+        parameters:
+          - name: "message"
+            value: "Step C: I am modified!"

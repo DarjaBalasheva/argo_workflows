@@ -3,7 +3,7 @@ import subprocess
 import time
 
 NS = os.getenv("ARGO_NAMESPACE", "argo")
-WF_FILE = os.getenv("WORKFLOW_YAML", "hello-workflow.yaml")
+WF_FILE = os.getenv("WORKFLOW_YAML", "workflows/hello-workflow.yaml")
 
 def run_workflow(cmd: list[str], timeout: int = 120, check: bool = True) -> str:
     p = subprocess.run(

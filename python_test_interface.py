@@ -39,6 +39,7 @@ class TestScenario:
     timeout_seconds: int
     namespace: str
     expect: Dict[str, Any]
+    actions: List[Dict[str, Any]]
     workflow_inline: Optional[Dict[str, Any]] = None
     workflow_file: Optional[Path] = None
 
@@ -71,6 +72,7 @@ def load_scenarios_from_dir(tests_dir: str | Path) -> List[TestScenario]:
                 timeout_seconds=parse_duration_to_seconds(data.get("timeout", "10m")),
                 namespace=data.get("namespace", "argo"),
                 expect=data.get("expect", {}),
+                actions=data.get("actions", []),
                 workflow_inline=wf_inline,
                 workflow_file=wf_file,
             )
@@ -128,6 +130,85 @@ def wait_workflow(custom: client.CustomObjectsApi, namespace: str, name: str, ti
     raise TimeoutError(f"Workflow {namespace}/{name} did not finish within {timeout_seconds}s")
 
 
+def _node_phase_matches(wf: Dict[str, Any], node_display_name: str, node_phase: str) -> bool:
+    """Return True if any status.nodes entry with displayName==node_display_name has phase==node_phase."""
+    nodes: Dict[str, Dict[str, Any]] = ((wf.get("status") or {}).get("nodes")) or {}
+    for n in nodes.values():
+        if n.get("displayName") == node_display_name and n.get("phase") == node_phase:
+            return True
+    return False
+
+
+def _run_action(
+    custom: client.CustomObjectsApi,
+    namespace: str,
+    wf_name: str,
+    action: Dict[str, Any],
+) -> None:
+    do = action.get("do") or {}
+    a_type = do.get("type")
+    if a_type != "patch_workflow":
+        raise ValueError(f"Unsupported action type: {a_type!r}")
+
+    patch_body = do.get("patch")
+    if not isinstance(patch_body, dict) or not patch_body:
+        raise ValueError("patch_workflow requires non-empty do.patch dict")
+
+    custom.patch_namespaced_custom_object(
+        group=ARGO_GROUP,
+        version=ARGO_VERSION,
+        namespace=namespace,
+        plural=ARGO_PLURAL,
+        name=wf_name,
+        body=patch_body,
+    )
+
+
+def wait_workflow_with_actions(
+    custom: client.CustomObjectsApi,
+    namespace: str,
+    name: str,
+    timeout_seconds: int,
+    actions: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Wait for workflow completion and execute scenario actions on matching conditions.
+
+    Supported action:
+      - patch_workflow: JSON merge patch to the Workflow CR while it's running.
+    """
+    deadline = time.time() + timeout_seconds
+    last_phase = None
+    executed: set[int] = set()
+
+    while time.time() < deadline:
+        wf = get_workflow(custom, namespace, name)
+        phase = ((wf.get("status") or {}).get("phase")) or "Unknown"
+        if phase != last_phase:
+            print(f"    phase={phase}")
+            last_phase = phase
+
+        # Evaluate actions *before* terminal check so we can patch during Running.
+        for idx, a in enumerate(actions or []):
+            if idx in executed:
+                continue
+
+            when = a.get("when") or {}
+            node_name = when.get("nodeName")
+            node_phase = when.get("nodePhase")
+
+            if node_name and node_phase and _node_phase_matches(wf, node_name, node_phase):
+                print(f"    action[{idx}]: condition met (nodeName={node_name}, nodePhase={node_phase}) -> running")
+                _run_action(custom, namespace, name, a)
+                executed.add(idx)
+                print(f"    action[{idx}]: done")
+
+        if phase in ("Succeeded", "Failed", "Error"):
+            return wf
+
+        time.sleep(2)
+
+    raise TimeoutError(f"Workflow {namespace}/{name} did not finish within {timeout_seconds}s")
+
 def read_pod_logs(core: client.CoreV1Api, namespace: str, pod_name: str) -> str:
     """Read logs from *all* containers in a Pod.
 
@@ -163,7 +244,7 @@ def read_pod_logs(core: client.CoreV1Api, namespace: str, pod_name: str) -> str:
             )
         except Exception as e:
             log = f"<failed to read init container logs: {e}>"
-        chunks.append(f" --- initContainer: {cname} --- {log}")
+        chunks.append(f"\n--- initContainer: {cname} ---\n{log}")
 
     # Regular containers
     for cname in ordered_containers:
@@ -176,7 +257,7 @@ def read_pod_logs(core: client.CoreV1Api, namespace: str, pod_name: str) -> str:
             )
         except Exception as e:
             log = f"<failed to read container logs: {e}>"
-        chunks.append(f" --- container: {cname} --- {log}")
+        chunks.append(f"\n--- container: {cname} ---\n{log}")
 
     return "".join(chunks).lstrip()
 
@@ -295,7 +376,7 @@ def assert_expectations(core: client.CoreV1Api, wf: Dict[str, Any], expect: Dict
 
     for n in nodes_expect:
         selector = n.get("selector") or {}
-        dn = selector.get("displayName") or n.get("displayName")
+        dn = selector.get("displayName") or n.get("displayName") or n.get("name")
         if not dn:
             raise AssertionError("Node expect entry missing displayName (use nodes[].selector.displayName)")
 
@@ -312,6 +393,23 @@ def assert_expectations(core: client.CoreV1Api, wf: Dict[str, Any], expect: Dict
             phases = [x.get("phase") for x in by_display[dn]]
             if exp_node_phase not in phases:
                 raise AssertionError(f"Node '{dn}': expected phase={exp_node_phase}, got phases={phases}")
+
+        # Inputs.parameters check (Argo exposes resolved parameters per node)
+        inputs_spec = n.get("inputs") or {}
+        exp_params = ((inputs_spec.get("parameters") or []) if isinstance(inputs_spec, dict) else [])
+        if exp_params:
+            ok = False
+            for node_obj in by_display[dn]:
+                node_inputs = (node_obj.get("inputs") or {}).get("parameters") or []
+                # build map name->value for quick contains check
+                got_map = {p.get("name"): p.get("value") for p in node_inputs if isinstance(p, dict)}
+                if all(got_map.get(p.get("name")) == p.get("value") for p in exp_params if isinstance(p, dict)):
+                    ok = True
+                    break
+            if not ok:
+                # show first candidate for debugging
+                sample = (by_display[dn][0].get("inputs") or {}).get("parameters") if by_display[dn] else None
+                raise AssertionError(f"Node '{dn}': expected inputs.parameters={exp_params}, got sample={sample}")
 
         # Logs check
         logs_spec = n.get("logs") or {}
@@ -353,7 +451,7 @@ def run_one_scenario(
     wf_name = created["metadata"]["name"]
     print(f"  submitted: {s.namespace}/{wf_name}")
 
-    final_wf = wait_workflow(custom, s.namespace, wf_name, s.timeout_seconds)
+    final_wf = wait_workflow_with_actions(custom, s.namespace, wf_name, s.timeout_seconds, s.actions)
     final_phase = ((final_wf.get("status") or {}).get("phase")) or "Unknown"
     print(f"  finished: phase={final_phase}")
 

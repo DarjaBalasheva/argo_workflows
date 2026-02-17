@@ -1,29 +1,41 @@
-version: "3.9"
-
 services:
   k3s:
     image: rancher/k3s:v1.29.1-k3s1
     container_name: k3s-argo
     privileged: true
-    ports:
-      - "6443:6443"     # Kubernetes API
-      - "2746:2746"     # Argo UI
-    volumes:
-      - k3s-data:/var/lib/rancher/k3s
-      - ./k3s/install-argo.sh:/install-argo.sh
-      - ./workflows:/workflows
-    environment:
-      - K3S_KUBECONFIG_OUTPUT=/output/kubeconfig.yaml
-      - K3S_KUBECONFIG_MODE=666
+    command:
+      - server
+      - --disable=traefik
+      - 127.0.0.1
+      - --tls-san
+      - localhost
     tmpfs:
       - /run
       - /var/run
-    entrypoint: ["/bin/sh", "-c"]
-    command: |
-      /bin/k3s server --disable=traefik &
-      sleep 15
-      sh /install-argo.sh
-      tail -f /dev/null
+    volumes:
+      - k3s-server:/var/lib/rancher/k3s
+      - ./kubeconfig:/output
+    environment:
+      - K3S_KUBECONFIG_OUTPUT=/output/kubeconfig.yaml
+      - K3S_KUBECONFIG_MODE=666
+    ports:
+      - "6443:6443"
+      - "32746:32746"
+
+  argo-installer:
+    depends_on:
+      - k3s
+    image: bitnami/kubectl:latest
+    container_name: k3s-argo-installer
+    network_mode: "service:k3s"
+    volumes:
+      - ./kubeconfig:/kubeconfig
+      - ./bootstrap-argo.sh:/bootstrap-argo.sh:ro
+    entrypoint: ["/bin/sh", "/bootstrap-argo.sh"]
+    environment:
+      - KUBECONFIG=/kubeconfig/kubeconfig.yaml
+      - ARGO_NODEPORT=32746
+    restart: "no"
 
 volumes:
-  k3s-data:
+  k3s-server:

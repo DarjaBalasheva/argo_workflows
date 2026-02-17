@@ -4,7 +4,7 @@ tags: ["positive", "conditionals", "when"]
 timeout: "2m"
 namespace: "argo"
 
-workflowFile: "../coinflip.yaml"
+workflowFile: "../workflows/coinflip.yaml"
 
 expect:
   workflowPhase: "Succeeded"
