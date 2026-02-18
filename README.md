@@ -1,18 +1,15 @@
-## Установка Argo Workflow
-```bash
-docker compose up -d
-```
+## Структура проекта
+- tests_yaml/ - директория с тестовыми сценариями для Argo Workflow
+- workflow/ - директория с Argo Workflow манифестами
+- python_test_interface - файл с кодом для запуска тестов на Python
 
-Argo Workflow UI будет доступен по адресу http://127.0.0.1:32746
+## Для запуска тестов необходимо выполнить следующие шаги:
+1. Положить тестовые сценарии в директорию `tests_yaml/`
+2. Положить Argo Workflow манифесты в директорию `workflow/`
+3. Запустить контейнер с тестами, который будет использовать Argo Workflow для выполнения тестов.
 
-## Запуск тестов
+## Запуск контейнера с тестами
 ```bash
-export KUBECONFIG="$PWD/kubeconfig/kubeconfig.local.yaml" 
-python python_test_interface.py --dir tests_yaml
+docker compose up --build argo-installer test-runner
 ```
-
-## Запуск тестов по тегам
-```bash
-export KUBECONFIG="$PWD/kubeconfig/kubeconfig.local.yaml" 
-python python_test_interface.py --dir tests_yaml --tags "tag1,tag2"
-```
+Argo Workflow UI будет доступен по адресу https://127.0.0.1:32746

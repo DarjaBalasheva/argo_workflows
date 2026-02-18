@@ -37,5 +37,24 @@ services:
       - ARGO_NODEPORT=32746
     restart: "no"
 
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: k3s-argo-test-runner
+    depends_on:
+      argo-installer:
+        condition: service_completed_successfully
+    network_mode: "service:k3s"
+    volumes:
+      - ./kubeconfig:/kubeconfig:ro
+    environment:
+      - KUBECONFIG=/kubeconfig/kubeconfig.yaml
+    command: >
+      sh -lc "
+        python python_test_interface.py --dir tests_yaml
+      "
+    restart: "no"
+
 volumes:
   k3s-server:
